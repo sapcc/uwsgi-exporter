@@ -1,14 +1,37 @@
-ARG ARCH="amd64"
-ARG OS="linux"
+FROM golang:1.22.5-alpine3.20 as builder
 
-FROM quay.io/prometheus/busybox-${OS}-${ARCH}:latest
-LABEL maintainer="Timon Wong <timon86.wang@gmail.com>"
+RUN apk add --no-cache --no-progress ca-certificates gcc git make musl-dev
 
-ARG ARCH="amd64"
-ARG OS="linux"
+COPY . /src
+ARG BININFO_BUILD_DATE BININFO_COMMIT_HASH BININFO_VERSION # provided to 'make install'
 
-COPY .build/${OS}-${ARCH}/uwsgi_exporter /bin/uwsgi_exporter
+RUN make -C /src install PREFIX=/pkg GOTOOLCHAIN=local GO_BUILDFLAGS='-mod vendor'
 
-USER        nobody
-EXPOSE      9117
-ENTRYPOINT  [ "/bin/uwsgi_exporter" ]
+################################################################################
+
+FROM alpine:3.20
+
+RUN addgroup -g 4200 appgroup \
+  && adduser -h /home/appuser -s /sbin/nologin -G appgroup -D -u 4200 appuser
+
+# upgrade all installed packages to fix potential CVEs in advance
+# also remove apk package manager to hopefully remove dependency on OpenSSL 🤞
+RUN apk upgrade --no-cache --no-progress \
+  && apk del --no-cache --no-progress apk-tools alpine-keys
+
+COPY --from=builder /etc/ssl/certs/ /etc/ssl/certs/
+COPY --from=builder /etc/ssl/cert.pem /etc/ssl/cert.pem
+COPY --from=builder /pkg/ /usr/
+# make sure all binaries can be executed
+RUN uwsgi_exporter --version 2>/dev/null
+
+ARG BININFO_BUILD_DATE BININFO_COMMIT_HASH BININFO_VERSION
+LABEL source_repository="https://github.com/sapcc/uwsgi-exporter" \
+  org.opencontainers.image.url="https://github.com/sapcc/uwsgi-exporter" \
+  org.opencontainers.image.created=${BININFO_BUILD_DATE} \
+  org.opencontainers.image.revision=${BININFO_COMMIT_HASH} \
+  org.opencontainers.image.version=${BININFO_VERSION}
+
+USER 4200:4200
+WORKDIR /home/appuser
+ENTRYPOINT [ "/usr/bin/uwsgi_exporter" ]
