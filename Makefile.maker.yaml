@@ -1,0 +1,47 @@
+# Configuration file for <https://github.com/sapcc/go-makefile-maker>
+
+metadata:
+  url: https://github.com/sapcc/uwsgi-exporter.git
+
+binaries:
+  - name: uwsgi_exporter
+    fromPackage: ./cmd/uwsgi_exporter
+    installTo: bin/
+
+golang:
+  enableVendoring: true
+  setGoModVersion: true
+
+dockerfile:
+  enabled: true
+  entrypoint: ["/usr/bin/uwsgi_exporter"]
+
+githubWorkflow:
+  ci:
+    enabled: true
+    ignorePaths: [ "**.md" ] # all Markdown files
+  license:
+    enabled: false
+  securityChecks:
+    enabled: true
+
+renovate:
+  enabled: true
+  assignees:
+    - I572056
+
+golangciLint:
+  createConfig: true
+  errcheckExcludes:
+    - encoding/json.Marshal
+
+spellCheck:
+  ignoreWords:
+    - microservice
+
+variables:
+  GO_BUILDENV: ''
+  GO_BUILDFLAGS: '-mod vendor'
+  GO_LDFLAGS: ''
+  GO_TESTENV: ''
+  GO_TESTFLAGS: ''
