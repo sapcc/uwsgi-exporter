@@ -16,8 +16,10 @@ package main
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -76,7 +78,6 @@ func TestBin(t *testing.T) {
 	portStart := 56000
 	t.Run(binName, func(t *testing.T) {
 		for _, f := range tests {
-			f := f // capture range variable
 			fName := runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name()
 			portStart++
 			data := bin{
@@ -108,8 +109,20 @@ func testLanding(t *testing.T, data bin) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer cmd.Wait()
-	defer cmd.Process.Kill()
+	defer func() {
+		err := cmd.Wait()
+		if err != nil {
+			t.Logf("uwsgi_exporter exited with error: %v", err)
+		}
+	}()
+
+	defer func() {
+		if cmd.Process != nil {
+			if err := cmd.Process.Kill(); err != nil {
+				t.Logf("Failed to kill process: %v", err)
+			}
+		}
+	}()
 
 	// Get the main page.
 	urlToGet := fmt.Sprintf("http://127.0.0.1:%d", data.port)
@@ -134,8 +147,18 @@ func testProbe(t *testing.T, data bin) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer cmd.Wait()
-	defer cmd.Process.Kill()
+	defer func() {
+		err := cmd.Wait()
+		if err != nil {
+			slog.Error("uwsgi_exporter exited with error", "error", err)
+		}
+	}()
+	defer func() {
+		err := cmd.Process.Kill()
+		if err != nil {
+			slog.Error("Failed to kill process", "error", err)
+		}
+	}()
 
 	// Get the main page.
 	urlToGet := fmt.Sprintf("http://127.0.0.1:%d/probe", data.port)
@@ -158,14 +181,18 @@ func waitForBody(urlToGet string) (body []byte, err error) {
 		// Try to get web page.
 		body, err = getBody(urlToGet)
 		if err == nil {
-			return body, err
+			return body, nil
 		}
 
 		// If there is a syscall.ECONNREFUSED error (web server not available) then retry.
-		if urlError, ok := err.(*url.Error); ok {
-			if opError, ok := urlError.Err.(*net.OpError); ok {
-				if osSyscallError, ok := opError.Err.(*os.SyscallError); ok {
-					if osSyscallError.Err == syscall.ECONNREFUSED {
+		var urlError *url.Error
+		if errors.As(err, &urlError) {
+			var opError *net.OpError
+			if errors.As(urlError, &opError) {
+				var osSyscallError *os.SyscallError
+				if errors.As(opError, &osSyscallError) {
+					fmt.Println(osSyscallError)
+					if errors.Is(osSyscallError, syscall.ECONNREFUSED) {
 						time.Sleep(1 * time.Second)
 						continue
 					}
@@ -182,7 +209,13 @@ func waitForBody(urlToGet string) (body []byte, err error) {
 
 // getBody is a helper function which retrieves http body from given address.
 func getBody(urlToGet string) ([]byte, error) {
-	resp, err := http.Get(urlToGet) //#nosec
+	client := &http.Client{}
+	ctx := context.Background()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlToGet, http.NoBody)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

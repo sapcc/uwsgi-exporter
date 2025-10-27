@@ -6,6 +6,7 @@ package collector
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"sync"
@@ -82,7 +83,10 @@ func newLocalServer(t *testing.T, network string) (*localServer, error) {
 
 	s := &localServer{Listener: ln, done: make(chan struct{})}
 	t.Cleanup(func() {
-		s.teardown()
+		err := s.teardown()
+		if err != nil {
+			t.Errorf("error tearing down local server: %v", err)
+		}
 	})
 	return s, nil
 }
@@ -93,9 +97,17 @@ func justWriteHandler(content []byte, ch chan<- error) func(*localServer, net.Li
 
 		switch ln := ln.(type) {
 		case *net.UnixListener:
-			ln.SetDeadline(time.Now().Add(someTimeout))
+			err := ln.SetDeadline(time.Now().Add(someTimeout))
+			if err != nil {
+				slog.Error("Could not set unix listener deadline", "error", err)
+				return
+			}
 		case *net.TCPListener:
-			ln.SetDeadline(time.Now().Add(someTimeout))
+			err := ln.SetDeadline(time.Now().Add(someTimeout))
+			if err != nil {
+				slog.Error("Could not set tcp listener deadline", "error", err)
+				return
+			}
 		}
 		c, err := ln.Accept()
 		if err != nil {
@@ -110,7 +122,11 @@ func justWriteHandler(content []byte, ch chan<- error) func(*localServer, net.Li
 			return
 		}
 
-		c.SetDeadline(time.Now().Add(someTimeout))
+		err = c.SetDeadline(time.Now().Add(someTimeout))
+		if err != nil {
+			slog.Error("Could not set connection deadline", "error", err)
+			return
+		}
 
 		if _, err := c.Write(content); err != nil {
 			ch <- err

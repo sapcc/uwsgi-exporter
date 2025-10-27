@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	_ "embed"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -32,7 +33,10 @@ func newUwsgiStatsServer(response []byte) *httptest.Server {
 	handlerFunc := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		header := w.Header()
 		header.Set("Content-Type", "application/json")
-		w.Write(response)
+		_, err := w.Write(response)
+		if err != nil {
+			slog.Error("", "error", err)
+		}
 	})
 	s := httptest.NewServer(handlerFunc)
 	return s
@@ -48,7 +52,11 @@ type MetricResult struct {
 
 func readMetric(m prometheus.Metric) MetricResult {
 	pb := &dto.Metric{}
-	m.Write(pb)
+	err := m.Write(pb)
+	if err != nil {
+		panic(err)
+	}
+
 	labels := make(labelMap, len(pb.Label))
 	for _, v := range pb.Label {
 		labels[v.GetName()] = v.GetValue()
@@ -227,7 +235,15 @@ func TestUwsgiExporter_Collect(t *testing.T) {
 	}
 
 	// Drain
-	for i := 0; i < len(workerMetricResults)+len(workerAppMetricResults)+len(workerCoreMetricResults); i++ {
+	for range workerMetricResults {
+		readMetric(<-ch)
+	}
+
+	for range workerAppMetricResults {
+		readMetric(<-ch)
+	}
+
+	for range workerCoreMetricResults {
 		readMetric(<-ch)
 	}
 
@@ -247,7 +263,7 @@ func TestUwsgiExporter_Collect(t *testing.T) {
 	}
 
 	// Drain
-	for i := 0; i < len(cacheMetricResults); i++ {
+	for range cacheMetricResults {
 		readMetric(<-ch)
 	}
 

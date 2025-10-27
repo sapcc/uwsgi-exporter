@@ -26,7 +26,7 @@ func newHTTPStatsReader(u *url.URL) StatsReader {
 }
 
 func (r *httpStatsReader) Read(ctx context.Context) (*UwsgiStats, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.uri, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.uri, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
