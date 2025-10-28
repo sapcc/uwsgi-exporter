@@ -2,11 +2,11 @@ package collector
 
 import (
 	"context"
+	"log/slog"
 	"strconv"
 	"time"
 
 	"github.com/go-kit/log"
-	"github.com/go-kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -87,10 +87,10 @@ var subsystemDescriptors = SubsystemDescriptors{
 func initDescriptors(subsystem string, nameToHelp map[string]string, labels []string) Descriptors {
 	descriptors := make(Descriptors, len(nameToHelp))
 	for name, help := range nameToHelp {
-		labels := append([]string{"stats_uri"}, labels...)
+		newLables := append([]string{"stats_uri"}, labels...)
 		descriptors[name] = prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, subsystem, name),
-			help, labels, nil)
+			help, newLables, nil)
 	}
 
 	return descriptors
@@ -125,7 +125,6 @@ func (v *SubsystemDescriptors) Describe(ch chan<- *prometheus.Desc) {
 
 // Exporter collects uwsgi metrics for prometheus.
 type Exporter struct {
-	ctx         context.Context
 	uri         string
 	statsReader StatsReader
 	metrics     Metrics
@@ -140,7 +139,6 @@ type ExporterOptions struct {
 // New creates a new uwsgi collector.
 func New(ctx context.Context, uri string, statsReader StatsReader, metrics Metrics, options ExporterOptions) *Exporter {
 	return &Exporter{
-		ctx:             ctx,
 		uri:             uri,
 		statsReader:     statsReader,
 		metrics:         metrics,
@@ -163,7 +161,7 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 // Collect fetches the stats from configured uwsgi stats location and
 // delivers them as Prometheus metrics. It implements prometheus.Collector.
 func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
-	e.scrape(e.ctx, ch)
+	e.scrape(ch)
 
 	ch <- e.metrics.TotalScrapes
 	ch <- e.metrics.Error
@@ -172,7 +170,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	ch <- e.metrics.Up
 }
 
-func (e *Exporter) scrape(ctx context.Context, ch chan<- prometheus.Metric) {
+func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 	e.metrics.TotalScrapes.Inc()
 
 	scrapeTime := time.Now()
@@ -180,9 +178,9 @@ func (e *Exporter) scrape(ctx context.Context, ch chan<- prometheus.Metric) {
 	e.metrics.Up.Set(1)
 	e.metrics.Error.Set(0)
 
-	uwsgiStats, err := e.statsReader.Read(ctx)
+	uwsgiStats, err := e.statsReader.Read()
 	if err != nil {
-		level.Error(e.Logger).Log("msg", "Scrape failed", "error", err)
+		slog.Error("Scrape failed", "error", err)
 
 		e.metrics.ScrapeErrors.Inc()
 		e.metrics.Up.Set(0)
@@ -190,7 +188,7 @@ func (e *Exporter) scrape(ctx context.Context, ch chan<- prometheus.Metric) {
 		return
 	}
 
-	level.Debug(e.Logger).Log("msg", "Scrape successful")
+	slog.Debug("Scrape successful")
 	e.metrics.ScrapeDurations.Observe(time.Since(scrapeTime).Seconds())
 
 	// Collect metrics from stats
@@ -288,11 +286,11 @@ func (e *Exporter) collectMetrics(stats *UwsgiStats, ch chan<- prometheus.Metric
 		// Worker Apps
 		ch <- e.mustNewGaugeMetric(workerDescs["apps"], float64(len(workerStats.Apps)), labelValues...)
 		for _, appStats := range workerStats.Apps {
-			labelValues := []string{strconv.Itoa(workerStats.ID), strconv.Itoa(appStats.ID), appStats.MountPoint, appStats.Chdir}
-			ch <- e.mustNewGaugeMetric(workerAppDescs["startup_time_seconds"], float64(appStats.StartupTime), labelValues...)
+			newLabelValues := []string{strconv.Itoa(workerStats.ID), strconv.Itoa(appStats.ID), appStats.MountPoint, appStats.Chdir}
+			ch <- e.mustNewGaugeMetric(workerAppDescs["startup_time_seconds"], float64(appStats.StartupTime), newLabelValues...)
 
-			ch <- e.mustNewCounterMetric(workerAppDescs["requests_total"], float64(appStats.Requests), labelValues...)
-			ch <- e.mustNewCounterMetric(workerAppDescs["exceptions_total"], float64(appStats.Exceptions), labelValues...)
+			ch <- e.mustNewCounterMetric(workerAppDescs["requests_total"], float64(appStats.Requests), newLabelValues...)
+			ch <- e.mustNewCounterMetric(workerAppDescs["exceptions_total"], float64(appStats.Exceptions), newLabelValues...)
 		}
 
 		// Worker Cores

@@ -20,7 +20,8 @@ func newTCPStatsReader(u *url.URL) StatsReader {
 	}
 }
 
-func (r *tcpStatsReader) Read(ctx context.Context) (*UwsgiStats, error) {
+func (r *tcpStatsReader) Read() (*UwsgiStats, error) {
+	ctx := context.Background()
 	d := newDialer()
 	conn, err := d.DialContext(ctx, "tcp", r.host)
 	if err != nil {

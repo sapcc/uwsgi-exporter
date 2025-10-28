@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	_ "net/http/pprof" //#nosec
 	"os"
@@ -11,8 +12,6 @@ import (
 	"time"
 
 	"github.com/alecthomas/kingpin/v2"
-	"github.com/go-kit/log"
-	"github.com/go-kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/promlog"
@@ -45,12 +44,13 @@ func main() {
 	kingpin.HelpFlag.Short('h')
 	kingpin.Parse()
 
-	logger := promlog.New(promlogConfig)
-	level.Info(logger).Log("msg", "Starting uwsgi_exporter", "version", version.Info())
-	level.Info(logger).Log("msg", "Build context", "build", version.BuildContext())
+	slog.Info("Starting uwsgi_exporter", "version", version.Info())
+	slog.Info("Build context", "build", version.BuildContext())
 
-	handlerFunc := newHandler(collector.NewMetrics(), logger)
-	http.Handle(*metricsPath, promhttp.InstrumentMetricHandler(prometheus.DefaultRegisterer, handlerFunc))
+	mux := http.NewServeMux()
+	handlerFunc := newHandler(collector.NewMetrics(), promlogConfig)
+
+	mux.Handle(*metricsPath, promhttp.InstrumentMetricHandler(prometheus.DefaultRegisterer, handlerFunc))
 	if *metricsPath != "/" && *metricsPath != "" {
 		landingConfig := web.LandingConfig{
 			Name:        "uWSGI Exporter",
@@ -65,29 +65,37 @@ func main() {
 		}
 		landingPage, err := web.NewLandingPage(landingConfig)
 		if err != nil {
-			level.Error(logger).Log("error", err)
+			slog.Error("Could not create landing page", "error", err)
 			os.Exit(1)
 		}
-		http.Handle("/", landingPage)
+		mux.Handle("/", landingPage)
 	}
-	http.HandleFunc("/probe", handleProbe(collector.NewMetrics(), logger))
-	http.HandleFunc("/-/healthy", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(200)
-		io.WriteString(w, "ok")
+	mux.HandleFunc("/probe", handleProbe(collector.NewMetrics(), promlogConfig))
+	mux.HandleFunc("/-/healthy", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, err := io.WriteString(w, "ok")
+		if err != nil {
+			slog.Error("Failed to write healthy response", "error", err)
+		}
 	})
 
-	srv := &http.Server{} //#nosec
+	srv := &http.Server{
+		Handler: mux,
+	} //#nosec
+	logger := promlog.New(promlogConfig)
 	err := web.ListenAndServe(srv, webConfig, logger)
 	if err != nil {
-		level.Error(logger).Log("msg", "Failed to listen address", "error", err)
+		slog.Error("Failed to listen address", "error", err)
 		os.Exit(1)
 	}
 }
 
-func newHandler(metrics collector.Metrics, logger log.Logger) http.HandlerFunc {
+func newHandler(metrics collector.Metrics, conf *promlog.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		logger := promlog.New(conf)
+
 		// Use request context for cancellation when connection gets closed.
-		timeoutSeconds, err := getTimeout(r, *timeoutOffset, logger)
+		timeoutSeconds, err := getTimeout(r, *timeoutOffset)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -102,7 +110,7 @@ func newHandler(metrics collector.Metrics, logger log.Logger) http.HandlerFunc {
 		if *statsURI != "" {
 			statsReader, err := collector.NewStatsReader(*statsURI)
 			if err != nil {
-				level.Error(logger).Log("msg", "Failed to create stats reader", "error", err)
+				slog.Error("Failed to create stats reader", "error", err)
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
@@ -123,8 +131,9 @@ func newHandler(metrics collector.Metrics, logger log.Logger) http.HandlerFunc {
 	}
 }
 
-func handleProbe(metrics collector.Metrics, logger log.Logger) http.HandlerFunc {
+func handleProbe(metrics collector.Metrics, conf *promlog.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		logger := promlog.New(conf)
 		params := r.URL.Query()
 		target := params.Get("target")
 		if target == "" {
@@ -132,7 +141,7 @@ func handleProbe(metrics collector.Metrics, logger log.Logger) http.HandlerFunc 
 			return
 		}
 
-		timeoutSeconds, err := getTimeout(r, *timeoutOffset, logger)
+		timeoutSeconds, err := getTimeout(r, *timeoutOffset)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -144,7 +153,7 @@ func handleProbe(metrics collector.Metrics, logger log.Logger) http.HandlerFunc 
 
 		statsReader, err := collector.NewStatsReader(target, collector.WithRequireSafeScheme(true))
 		if err != nil {
-			level.Error(logger).Log("msg", "Failed to create stats reader", "error", err)
+			slog.Error("Failed to create stats reader", "error", err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -160,7 +169,7 @@ func handleProbe(metrics collector.Metrics, logger log.Logger) http.HandlerFunc 
 	}
 }
 
-func getTimeout(r *http.Request, offset float64, logger log.Logger) (timeoutSeconds float64, err error) {
+func getTimeout(r *http.Request, offset float64) (timeoutSeconds float64, err error) {
 	// If a timeout is configured via the Prometheus header, add it to the request.
 	if v := r.Header.Get("X-Prometheus-Scrape-Timeout-Seconds"); v != "" {
 		var err error
@@ -175,7 +184,7 @@ func getTimeout(r *http.Request, offset float64, logger log.Logger) (timeoutSeco
 
 	if offset >= timeoutSeconds {
 		// Ignore timeout offset if it doesn't leave time to scrape.
-		level.Error(logger).Log("msg", "Timeout offset should be lower than prometheus scrape timeout", "offset", offset, "prometheus_scrape_timeout", timeoutSeconds)
+		slog.Info("Timeout offset should be lower than prometheus scrape timeout", "offset", offset, "prometheus_scrape_timeout", timeoutSeconds)
 	} else {
 		// Subtract timeout offset from timeout.
 		timeoutSeconds -= offset

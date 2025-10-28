@@ -18,10 +18,10 @@ func TestFileStatsReader_Read(t *testing.T) {
 
 	assert.Equal(t, reflect.TypeOf(&fileStatsReader{}).String(), reflect.TypeOf(reader).String())
 
-	ctx, cancel := context.WithTimeout(context.Background(), someTimeout)
+	_, cancel := context.WithTimeout(context.Background(), someTimeout)
 	defer cancel()
 
-	uwsgiStats, err := reader.Read(ctx)
+	uwsgiStats, err := reader.Read()
 	assert.NoError(t, err)
 
 	assert.Equal(t, uwsgiStats.Version, "2.0.12")

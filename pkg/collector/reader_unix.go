@@ -20,7 +20,8 @@ func newUnixStatsReader(u *url.URL) StatsReader {
 	}
 }
 
-func (r *unixStatsReader) Read(ctx context.Context) (*UwsgiStats, error) {
+func (r *unixStatsReader) Read() (*UwsgiStats, error) {
+	ctx := context.Background()
 	d := newDialer()
 	conn, err := d.DialContext(ctx, "unix", r.filename)
 	if err != nil {

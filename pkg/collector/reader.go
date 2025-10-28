@@ -10,7 +10,7 @@ import (
 
 // StatsReader reads uwsgi stats from specified uri.
 type StatsReader interface {
-	Read(ctx context.Context) (*UwsgiStats, error)
+	Read() (*UwsgiStats, error)
 }
 
 // StatsReaderFunc is prototype for new stats reader

@@ -1,7 +1,6 @@
 package collector
 
 import (
-	"context"
 	"fmt"
 	"net/url"
 	"os"
@@ -21,7 +20,7 @@ func newFileStatsReader(u *url.URL) StatsReader {
 	}
 }
 
-func (r *fileStatsReader) Read(_ context.Context) (*UwsgiStats, error) {
+func (r *fileStatsReader) Read() (*UwsgiStats, error) {
 	f, err := os.Open(r.filename)
 	if err != nil {
 		return nil, fmt.Errorf("unable to open file: %w", err)
